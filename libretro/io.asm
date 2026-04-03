@@ -1,6 +1,6 @@
 ;****************************************************************************
 ;
-;    Copyright (C) 2021 John Winans
+;    Inspired heavily by the Z80-Retro project by John Winans
 ;
 ;    This library is free software; you can redistribute it and/or
 ;    modify it under the terms of the GNU Lesser General Public
@@ -17,52 +17,55 @@
 ;    Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301
 ;    USA
 ;
-; https://github.com/johnwinans/2063-Z80-cpm
 ;
 ;****************************************************************************
 
-; Z80 Retro Rev 3 IO port definitions
+; I/O port definitions (largely directly taken from Toshiba TMPZ84C015 datasheet)
 
+;
+; Note: CTC 0 & 1 available
+;       CTC 2 SIO Channel A baud rate (1.8432MHz on CLK2)
+;       CTC 3 SIO Channel B baud rate (1.8432MHz on CLK3)
+ctc_0:			equ	0x10		; CTC port 0
+ctc_1:			equ	0x11		; CTC port 1
+ctc_2:			equ	0x12		; CTC port 2
+ctc_3:			equ	0x13		; CTC port 3
 
-gpio_in:		equ     0x00		; GP input port
-gpio_out:		equ	0x10		; GP output port
-prn_dat:		equ	0x20		; printer data out
+; SIO port A optionally available on Raspberry Pi interface
+; SIO port B available
+sio_ad:			equ	0x18		; SIO port A, data
+sio_ac:			equ	0x19		; SIO port A, command
+sio_bd:			equ	0x1A		; SIO port B, data
+sio_bc:			equ	0x1B		; SIO port B, command
 
-sio_ad:			equ	0x30		; SIO port A, data
-sio_bd:			equ	0x31		; SIO port B, data
-sio_ac:			equ	0x32		; SIO port A, control
-sio_bc:			equ	0x33		; SIO port B, control
+; PIO ports A & B available
+pio_ad:			equ	0x1C		; PIO port A, data
+pio_ac:			equ	0x1D		; PIO port A, command
+pio_bd:			equ	0x1E		; PIO port B, data
+pio_bc:			equ	0x1F		; PIO port B, command
 
-ctc_0:			equ	0x40		; CTC port 0
-ctc_1:			equ	0x41		; CTC port 1
-ctc_2:			equ	0x42		; CTC port 2
-ctc_3:			equ	0x43		; CTC port 3
+; I/O port decoder on-board
+io40_base:			equ	0x40		; IO decode 0x40-0x47
+io48_base:			equ	0x48		; IO decode 0x48-0x4F
+io50_base:			equ	0x50		; IO decode 0x50-0x57
+io58_base:			equ	0x58		; IO decode 0x58-0x5F
+io60_base:			equ	0x60		; IO decode 0x60-0x67
+io68_base:			equ	0x68		; IO decode 0x68-0x6F
+io70_base:			equ	0x70		; IO decode 0x70-0x77
+io78_base:			equ	0x78		; IO decode 0x78-0x7F
 
-flash_disable:		equ	0x70		; dummy-read from this port to disable the FLASH
+control_reg:			equ     io78_base	; R/W @ 0x78
 
+ram_bank_mask:			equ	0x0F		; Ram bank is lowest
+							; 4 bits of control reg
+user_led_bit:			equ	4		; 1 = LED on
+user_led:			equ	1 << user_led_bit
 
-; bit-assignments for General Purpose output port 
-gpio_out_sd_mosi:	equ	0x01
-gpio_out_sd_clk:	equ	0x02
-gpio_out_sd_ssel:	equ	0x04
-gpio_out_prn_stb:	equ	0x08
-gpio_out_a15:		equ	0x10
-gpio_out_a16:		equ	0x20
-gpio_out_a17:		equ	0x40
-gpio_out_a18:		equ	0x80
+							; 0x20 available
+							; 0x40 available
 
-; a bitmask representing all of the lobank address bits 
-gpio_out_lobank:	equ	0|(gpio_out_a15|gpio_out_a16|gpio_out_a17|gpio_out_a18)
-
-; bit-assignments for General Purpose input port 
-gpio_in_prn_err:	equ	0x01
-gpio_in_prn_stat:	equ	0x02
-gpio_in_prn_papr:	equ	0x04
-gpio_in_prn_bsy:	equ	0x08
-gpio_in_prn_ack:	equ	0x10
-gpio_in_user1:		equ	0x20 
-gpio_in_sd_det:		equ	0x40
-gpio_in_sd_miso:	equ	0x80
+flash_bit:			equ	7		; bit 7 for set/reset
+flash_enable:			equ	1 << flash_bit	; 1 = Flash mapped in
 
 
 ;****************************************************************************
@@ -70,10 +73,10 @@ gpio_in_sd_miso:	equ	0x80
 ; Memory banks:
 ;
 ; BANK     Usage
-;   0    SD cache bank 0
-;   1    SD cache bank 1
-;   2    SD cache bank 2
-;   3    SD cache bank 3
+;   0    disk cache bank 0
+;   1    disk cache bank 1
+;   2    disk cache bank 2
+;   3    disk cache bank 3
 ;   4
 ;   5
 ;   6
@@ -91,6 +94,13 @@ gpio_in_sd_miso:	equ	0x80
 
 .low_bank:      equ     0x0e    ; The RAM BANK to use for the bottom 32K
 
-; The initial value to write into the gpio_out latch.
-; This will select low-bank E, idle the SD card, and idle the printer.
-gpio_out_init:  equ     gpio_out_sd_mosi|gpio_out_sd_clk|gpio_out_sd_ssel|gpio_out_prn_stb|(.low_bank<<4)
+init_ctl:	equ	flash_enable | .low_bank
+
+; Hardware will set the flash enable bit on reset.
+; All other bits are not defined on reset.
+; Control register is R/W, bits 0x20 & 0x40 can be used as non-volatile flags
+
+wdt:				equ	0xF0		; WDTER, WDTPR, HALTMR
+wdt_command:			equ	0xF1		; Watchdog command
+
+daisy_chain_priority:		equ	0xF4

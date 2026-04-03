@@ -23,15 +23,10 @@
 
 
 include 'sio.asm'
-include 'ctc1.asm'
 
-con_init:
-        ;ld     c,6                     ; C = 6 = 19200 bps
-        ld      c,12                    ; C = 12 = 9600 bps
-        call    init_ctc_1              ; start CTC1 in case J11-A selects it!
-        call    sioa_init               ; 115200 or 19200/9600 depending on J11-A
-        ret
-
+con_init:	equ	sioa_init
+con_rx_ready:	equ	sioa_rx_ready
+con_tx_char:	equ	sioa_tx_char
 
 ;##########################################################################
 ;

@@ -1,6 +1,7 @@
 ;****************************************************************************
 ;
 ;    Copyright (C) 2021,2022,2023,2024 John Winans
+;    Copyright (C) 2026 Andy Warner
 ;
 ;    This library is free software; you can redistribute it and/or
 ;    modify it under the terms of the GNU Lesser General Public
@@ -37,7 +38,7 @@
 ;
 ;****************************************************************************
 
-.boot_rom_version:	equ	1
+.boot_rom_version:	equ	2
 
 .debug:		equ	0		; Set to 1 to show debug printing, else 0 
 
@@ -45,27 +46,33 @@ include	'io.asm'
 include	'memory.asm'
 
 .load_blks:	equ	(0x10000-LOAD_BASE)/512
-.stacktop:	equ	LOAD_BASE	; (so the SD loader does not overwrite)
+.stacktop:	equ	LOAD_BASE	; (so the CF loader does not overwrite)
 
 	org		0x0000		; Cold reset Z80 entry point.
 
 	;###################################################
-	; NOTE THAT THE SRAM IS NOT READABLE AT THIS POINT
+	; NOTE THAT THE SRAM at 0x0000 - 0x7FFF IS NOT READABLE AT THIS POINT
 	;###################################################
 
-	; Select SRAM low bank, idle the SD card, etc.
-	ld	a,(gpio_out_cache)
-	out	(gpio_out),a
+	;	Select SRAM bank for 0x0000 - 0x7FFF, leave flash enabled, user LED off.
+	ld	a,init_ctl
+	out	(control_reg),a
 
-	; Copy the FLASH into the SRAM by reading every byte and 
-	; writing it back into the same address.
-	ld	hl,0
-	ld	de,0
-	ld	bc,.end
-	ldir				; Copy all the code in the FLASH into RAM at same address.
+	;       Copy flash code into RAM
+	;       When the flash is enabled, reads from all addresses
+	;       in lower 32K will come from flash, writes will go to RAM.
+	;       It looks like a copy-in-place, but does more.
 
-	; Disable the FLASH and run from SRAM only from this point on.
-	in	a,(flash_disable)	; Dummy-read this port to disable the FLASH.
+	ld	hl,0x0000
+	ld	de,0x0000
+	ld	bc,.rom_size
+	ldir
+
+	;       Clear the flash enable bit, mapping the flash out of
+	;       lower 32K of the address space.
+	in      a, (control_reg)
+	res     flash_bit, a
+	out     (control_reg), a
 
 	;###################################################
 	; STARTING HERE, WE ARE RUNNING FROM RAM
@@ -80,11 +87,41 @@ include	'memory.asm'
 	ld	hl,.boot_msg
 	call	puts
 
+	ld	hl,0		; DWD
+	ld	bc,1024		; DWD
+	ld	e,1		; DWD
+	call hexdump		; DWD
+
+	ld	ix,guid_1
+	call	print_guid
+	call	puts_crlf
+	call	puts_crlf
+	ld	ix,guid_2
+	call	print_guid
+	call	puts_crlf
+
+	ld	hl,guid_1
+	ld	de,guid_2
+	call	compare_guid
+
+	jr	z,.lala_1
+	call	iputs
+	db	'GUIDs do not match\r\n\0'
+	jr	.lala_2
+.lala_1:
+	call	iputs
+	db	'GUIDs match !\r\n\0'
+.lala_2:
+
 	; Load bootstrap code from the SD card.
-	call	.boot_sd
+	call	.boot_cf
 
 	call	iputs
 	db	'SYSTEM LOAD FAILED! HALTING.\r\n\0'
+
+	in      a, (control_reg)	; DWD
+	set     user_led_bit, a		; DWD
+	out     (control_reg), a	; DWD
 
 	; Spin loop here because there is nothing else to do
 .halt_loop:
@@ -100,17 +137,19 @@ include	'memory.asm'
 	db	'\0'
 
 ;##############################################################################
-; Load 16K from the first blocks of partition 1 on the SD card into
-; memory starting at 'LOAD_BASE' and jump to it.
-; If reading the SD card should fail then this function will return.
-;
-; TODO: Sanity-check the partition type, size and design some sort of 
-; signature that can be used to recognize the SD card partition as viable.
+; Load OS image from reserved track(s) of the first bootable partition.
+; TODO:
+;   - CF driver
+;   - GPT parsing
+;   - Choose parition (type, etc)
+;   - Identify reserved area & length
+;   - Signature/eyecatcher to validate choices
 ;##############################################################################
-.boot_sd:
+.boot_cf:
 	call	iputs
-	db	'\r\nBooting SD card partition 1\r\n\n\0'
+	db	'\r\nBooting from CF card\r\n\n\0'
 
+if 0
 	call	sd_boot		; transmit 74+ CLKs
 
 	; The response byte should be 0x01 (idle) from cmd0
@@ -345,12 +384,13 @@ endif
 	ld	a,.boot_rom_version
 	jp	z,LOAD_BASE		; Run the code that we just read in from the SD card.
 
+endif
 	call	iputs
 	db	'Error: Could not load O/S from partition 1.\r\n\0'
 	ret
 
 
-
+if 0
 ;############################################################################
 ;### Read B number of blocks into memory at address DE starting with
 ;### 32-bit little-endian block number on the stack.
@@ -439,18 +479,21 @@ endif
 
 include	'sdcard.asm'
 include	'spi.asm'
+endif
+
 include	'hexdump.asm'
 include 'console.asm'
 include 'puts.asm'
 include 'bsp.asm'
+include 'guid.asm'
 
-;##############################################################################
-; This is a cache of the last written data to the gpio_out port.
-; The initial value here is what is written to the latch during startup.
-;##############################################################################
-gpio_out_cache:	db	gpio_out_init
+guid_1:
+	db	0x40, 0xc6, 0x5a, 0x4b, 0xce, 0x49, 0x9b, 0x48, 0xae, 0x90, 0x1e, 0x79, 0xb8, 0x18, 0x09, 0xd1
 
+guid_2:
+	db	0x08, 0x8f, 0x5a, 0xa8, 0x40, 0xea, 0x28, 0x45, 0x9d, 0x8c, 0xdc, 0x68, 0x28, 0x06, 0x3c, 0xab
 ;##############################################################################
 ; This marks the end of the data copied from FLASH into RAM during boot
 ;##############################################################################
-.end:		equ	$
+.rom_size:		equ	$
+	end
