@@ -11,6 +11,10 @@
 7. Linux scripting to support using cpmtools to create/manage partitions and matching CP/M filesystems
 8. Read CF identity data on boot, and error if CF card is larger than 2TB :)
 
+Re-use the 512-byte LBA -> 128 byte sector logic/code from Z80-Retro. Eventually do the samee with the cache, but also alter the cache code so that NMI can still be handled, regardless of selected page.
+
+TODO: Consider whether the GUID/UUID -> dpb/dph mapping can be done in jettisonable code on cold boot, to save sapce.
+
 To compile this document into a pdf file requires the use of LaTex.
 Install LaTeX on Ubuntu or Raspberry Pi OS like this:
 
